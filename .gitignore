@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+
+# Downloaded MediaPipe model files (run scripts/download_models.py)
+models/*
+!models/.gitkeep
+
+# Test photos are personal — keep them out of git unless you decide otherwise
+tests/images/*
+!tests/images/.gitkeep
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

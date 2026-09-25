@@ -1,0 +1,18 @@
+# Runtime dependencies (tested on Python 3.13).
+# Dev/test tools live in requirements-dev.txt.
+
+# Web framework
+fastapi==0.141.1
+uvicorn[standard]==0.54.0
+python-multipart==0.0.32          # multipart/form-data uploads
+pydantic-settings==2.15.0         # settings from .env
+
+# Vision (used from Phase 2)
+mediapipe==1.0.1
+# mediapipe itself depends on opencv-contrib-python. Do NOT also install
+# opencv-python-headless: both write to the same "cv2" package and break each other.
+opencv-contrib-python==5.0.0.93
+numpy==2.5.3
+
+# Virtual try-on provider (used from Phase 5)
+replicate==1.0.7
