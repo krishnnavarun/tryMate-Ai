@@ -4,63 +4,110 @@ Python + FastAPI service for the tryMate store: body measurements, skin tone,
 size recommendation and virtual try-on. Only the store's Express server calls it
 (server-to-server, `X-API-Key` header). The full spec is in [PROJECT_SPEC.md](PROJECT_SPEC.md).
 
-> **Status: Phase 2 (pose + measurements) done.** `/analyze` returns real body
-> measurements from the photo. Skin tone and colors are still placeholders (Phase 3).
+> **Status: Phases 1–6 built.** All four endpoints are real. What's left needs you:
+> calibrating measurements against a tape measure, one real Replicate try-on (needs a token),
+> and a `docker build` on a machine with Docker. See [What still needs you](#what-still-needs-you).
 
-| Endpoint | Auth | Current behaviour |
+| Endpoint | Auth | What it does |
 |---|---|---|
-| `GET /health` | none | real |
-| `POST /analyze` | `X-API-Key` | **real measurements**, confidence, warnings, debug image; skin tone/colors are placeholders (Phase 3) |
-| `POST /recommend-size` | `X-API-Key` | validates input, recommends the middle size of the chart (Phase 4) |
-| `POST /try-on` | `X-API-Key` | validates input, returns a placeholder image URL (Phase 5) |
+| `GET /health` | none | `{status, version}` |
+| `POST /analyze` | `X-API-Key` | photo + height → measurements, skin tone, 8 suggested colors, confidence, warnings, optional debug image |
+| `POST /recommend-size` | `X-API-Key` | measurements + size chart → best size + score and fit note per size |
+| `POST /try-on` | `X-API-Key` | person photo + garment → try-on image (Replicate IDM-VTON, or a free local mock) |
 
 ---
 
-## How the measurements work
+## How it works
 
-Full details, with the maths, are in the docstring at the top of
-[`app/services/measurements.py`](app/services/measurements.py). In short:
+### 1. Measurements (`/analyze`)
+Full maths in [`app/services/measurements.py`](app/services/measurements.py).
 
 1. **MediaPipe PoseLandmarker** (heavy model) finds 33 body landmarks and a person
-   segmentation mask. Checks: nobody found → `NO_PERSON_DETECTED`; a second clearly
-   visible person → `MULTIPLE_PEOPLE`; nose/shoulders/hips/ankles hidden or outside the
-   photo → `PARTIAL_BODY` (the message names the missing parts).
-2. **Scale:** the top of the head and the soles come from the mask; `cm_per_px = height_cm / pixel height`.
-3. **Lengths** from landmarks: shoulder (× a 1.15 correction, because the landmarks are the
-   shoulder *joints*), torso (shoulder line → hip line), arm (shoulder → elbow → wrist),
-   leg (hip → knee → ankle).
-4. **Chest / waist:** the torso's silhouette width at chest/waist height, multiplied by
-   circumference ÷ breadth ratios computed from **ANSUR II** (US Army anthropometric survey,
-   2012, 4,082 men): chest × 3.658, waist × 2.879. Chest/waist heights (27.7% / 71.2% of the
-   way from shoulders to hips) come from the same data.
-5. **Arms touching the body:** the width search never goes past the arm. If the arm touches
-   the torso, the breadth is estimated from shoulder width instead and a warning is added.
+   segmentation mask. Checks: nobody → `NO_PERSON_DETECTED`; a second clearly visible
+   person → `MULTIPLE_PEOPLE`; nose/shoulders/hips/ankles hidden or cut off → `PARTIAL_BODY`
+   (the message names what's missing).
+2. **Scale:** top of head and soles come from the mask; `cm_per_px = height_cm / pixel height`.
+3. **Lengths** from landmarks: shoulder (× 1.15, because the landmarks are the shoulder
+   *joints*), torso (shoulder line → hip line), arm (shoulder → elbow → wrist), leg (hip → knee → ankle).
+4. **Chest / waist:** silhouette width at chest/waist height × circumference-to-breadth ratios
+   computed from **ANSUR II** (US Army anthropometric survey 2012, 4,082 men): chest × 3.658,
+   waist × 2.879. Chest/waist heights (27.7% / 71.2% of the way from shoulders to hips) come
+   from the same data.
+5. **Arms touching the body:** the width search stops at the arm; if the arm touches the torso,
+   the breadth is estimated from shoulder width and a warning is added.
 6. **Confidence** = average landmark visibility × a penalty for each fallback/problem.
 
-### Expected accuracy (honest)
-- Even with a perfect width, turning a front-view **width into a circumference** has a
-  typical error of **~4.7 cm (chest)** and **~2.6 cm (waist)** in ANSUR II, because bodies
-  differ in depth. Real photos add error on top: realistically **±4–8 cm** for chest/waist
-  and **±2–3 cm** for lengths with a good photo.
-- **Loose clothing inflates chest/waist** (a baggy tee can add 10 cm), and forearms pointing
-  at the camera make arms look shorter.
-- A single front photo can't see body depth, so it will never be as accurate as a tape measure.
+**Accuracy (honest):** even with a perfect width, width → circumference has a typical error of
+~4.7 cm (chest) and ~2.6 cm (waist) in ANSUR II. With a good photo expect roughly ±4–8 cm for
+chest/waist and ±2–3 cm for lengths. Loose clothes inflate chest/waist; forearms pointing at
+the camera make arms look short. A front photo can't see depth, so it won't match a tape measure.
 
-### Photo rules that matter most
-Full body head to feet · fitted clothes · stand straight, facing the camera · arms held
-~30° away from the body (an "A" pose) · camera at chest height, 2–3 m away · plain background, good light.
+**Photo rules:** full body head to feet · fitted clothes · facing the camera · arms ~30° away
+from the body ("A" pose) · camera at chest height, 2–3 m away · plain background · daylight.
 
-### Calibrating (Phase 2 "done when")
-Compare with a measuring tape, then tune the constants at the top of
-`app/services/measurements.py`. The most likely ones to need a change:
-`SHOULDER_WIDTH_FACTOR` (1.15, set from one test photo), `CHEST_LEVEL` / `WAIST_LEVEL`,
-and `DIP_THRESHOLD`. Use `debug=true` to see exactly which lines were measured.
+### 2. Skin tone and colors (`/analyze`)
+Full details in [`app/services/skin_tone.py`](app/services/skin_tone.py) and
+[`app/services/colors.py`](app/services/colors.py).
 
-**What was verified:** on synthetic "paper doll" poses, every number matches the
-hand-calculated value (tests). On a public-domain test photo, all the steps ran and the
-debug image showed the right lines. The clean photo gave plausible values; the photo with
-a leg hidden behind a chair correctly returned `PARTIAL_BODY`. **Not yet verified:**
-accuracy against real tape measurements (needs your photo + tape).
+1. **Face:** the head is cropped using the pose landmarks, enlarged, and MediaPipe
+   **FaceLandmarker** finds the 478-point face mesh (faces in full-body photos are too small
+   to find otherwise).
+2. **Sampling:** three small circles on the mid-forehead and both cheeks (away from eyes,
+   brows, lips and hairline). Pixels outside the classic YCrCb skin range (Chai & Ngan 1999)
+   and the darkest 15% / brightest 10% are dropped; the median colour in CIELAB is used.
+3. **Lighting:** "white patch" correction scales the skin pixels so the photo's brightest
+   near-grey areas become white (bounded; skipped when there are none). Strong colour casts and
+   dark photos add a warning.
+4. **Tone:** the **Individual Typology Angle** `ITA = atan((L* − 50) / b*)`, a standard
+   dermatology measure, with the Del Bino et al. (2006) bands →
+   `fair` · `light` · `medium` · `tan` · `brown` · `deep`.
+5. **Undertone:** hue angle `atan2(b*, a*)`: more golden = `warm`, more pink = `cool`, else
+   `neutral` (heuristic thresholds 40° / 52°, tune with real photos).
+6. **Colors:** undertone picks the family (warm = earthy/golden, cool = blue-based/jewel,
+   neutral = soft mix), depth picks the strength (lighter skin → softer colours, deeper skin →
+   brighter ones). 9 palettes × 8 named colours.
+
+**FACE_NOT_FOUND decision:** if the body is fine but the face can't be found, `/analyze` still
+returns **200** with the measurements, `skin_tone: null`, `color_suggestions: []` and a warning.
+Measurements are the main value of a scan, so a photo that's good for sizing isn't rejected.
+
+**Known limitation:** a camera records skin × light, so the tone depends on lighting. Test
+photos taken indoors or against the light came out too deep. Results are most reliable in
+soft daylight facing a window. On one photo, the result stayed the same across mirroring,
+resizing, JPEG quality and ±15% exposure, except +15% brightness moved deep → medium.
+
+### 3. Size recommendation (`/recommend-size`)
+Full details in [`app/services/sizing.py`](app/services/sizing.py).
+
+- Chart fields compared: `chest`, `waist`, `shoulder`, `length` (tops/dresses: ≈ torso × 1.55)
+  and `inseam` (lower body). Other fields (e.g. `hip`) are ignored.
+- **Fit preference** moves the ideal point inside each range: regular = middle,
+  slim = 75% up (snug), loose = 25% up (roomy). Length ignores the preference.
+- **Score** = `exp(−½ × Σ wᵢ dᵢ² / Σ wᵢ)`, where `dᵢ` = (body − ideal) / σ (σ ≈ 4 cm for
+  chest/waist, 2 cm for shoulders, close to the measurement error). **Weights** by category:
+  upper body = chest 0.45 · shoulder 0.25 · waist 0.15 · length 0.15.
+- **Best size** = highest score (a tie goes to the larger size).
+- **Notes** from the direction of each deviation over 0.75σ: "Tight at chest and shoulders",
+  "Loose at shoulders, slightly long", "Good fit".
+- A chart with no comparable fields → `422 INVALID_INPUT`.
+
+Hand-checked: textbook M → M ("Good fit"); exactly between M and L → slim M, regular L,
+loose L; bigger than every size → XL; smaller than every size → S; broad shoulders → M with
+"Tight at shoulders". All of these are tests.
+
+### 4. Virtual try-on (`/try-on`)
+- A provider interface ([`app/tryon/base.py`](app/tryon/base.py)) with two providers:
+  - **`replicate_idm`**: [IDM-VTON on Replicate](https://replicate.com/cuuupid/idm-vton).
+    ~17 s typical on an A100 (longer on a cold start), ≈ **$0.023 per run**.
+    **Licence: CC BY-NC-SA 4.0 — non-commercial only.** Fine for a demo/portfolio; a commercial
+    store needs a commercially licensed model, which can be added as another provider.
+  - **`mock`**: builds a placeholder locally (the person photo + garment thumbnail + "MOCK
+    TRY-ON" banner), free and instant. Used when `TRYON_MOCK=true`.
+- Timeout **120 s** (the Replicate prediction is cancelled, so you stop paying) → `TRYON_TIMEOUT`.
+  Model error → `TRYON_FAILED`. Network error / Replicate 5xx / 429 → **retried once**.
+- Rate limit: at most `TRYON_RATE_LIMIT_PER_MINUTE` (default 30) try-ons per minute in
+  total → `429 RATE_LIMITED`. The store also limits try-ons per user.
+- Try-on shows how the garment **looks**, not how it **fits**; fit comes from `/recommend-size`.
 
 ---
 
@@ -84,7 +131,7 @@ pip install -r requirements-dev.txt
 copy .env.example .env            # Windows
 cp .env.example .env              # macOS / Linux
 
-# 5. Download the MediaPipe model files into ./models (≈ 50 MB, used from Phase 2)
+# 5. Download the MediaPipe model files into ./models (≈ 50 MB)
 python scripts/download_models.py
 ```
 
@@ -103,7 +150,7 @@ uvicorn app.main:app --reload --port 8000
 ## Test
 
 ```bash
-pytest
+pytest          # 164 tests, a few seconds; never calls Replicate
 ```
 
 ## Environment variables
@@ -111,12 +158,15 @@ pytest
 | Name | Default | Meaning |
 |---|---|---|
 | `SERVICE_API_KEY` | `change-me` | Shared secret. Must match `AI_SERVICE_KEY` in the store's `server/.env`. |
-| `REPLICATE_API_TOKEN` | *(empty)* | Replicate token for try-on (Phase 5). |
-| `TRYON_PROVIDER` | `replicate_idm` | `replicate_idm` \| `catvton` \| `mock` |
-| `TRYON_MOCK` | `false` | `true` = placeholder image, no Replicate cost. |
+| `REPLICATE_API_TOKEN` | *(empty)* | Replicate token for real try-on. |
+| `TRYON_PROVIDER` | `replicate_idm` | `replicate_idm` \| `mock` (`catvton` is reserved, not implemented) |
+| `TRYON_MOCK` | `false` | `true` = always use the free mock provider. |
+| `REPLICATE_IDM_VERSION` | *(empty)* | Pin an IDM-VTON version id; empty = the model's latest version. |
+| `TRYON_RATE_LIMIT_PER_MINUTE` | `30` | Global cap on try-ons per minute (0 = off). |
+| `POSE_MODEL` | `heavy` | `lite` \| `full` \| `heavy` (heavy ≈ 70 ms per photo on a laptop CPU). |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warning` \| `error` |
-| `PORT` | `8000` | Used by `python -m app.main`. |
-| `POSE_MODEL` | `heavy` | `lite` \| `full` \| `heavy`. Heavy is the most accurate (~70 ms per photo on a laptop CPU). |
+| `LOG_FORMAT` | `text` | `text` (readable) \| `json` (one JSON object per line, for production) |
+| `PORT` | `8000` | Used by `python -m app.main` and the Docker image. |
 
 ---
 
@@ -135,7 +185,7 @@ curl -X POST http://localhost:8000/analyze \
   -F "height_cm=175" \
   -F "weight_kg=72"
 
-# Analyze + save the debug image (landmarks and measured lines drawn on the photo)
+# Analyze + save the debug image (landmarks, measured lines and skin sample spots)
 curl -s -X POST http://localhost:8000/analyze \
   -H "X-API-Key: change-me" -F "image=@photo.jpg" -F "height_cm=175" -F "debug=true" \
   | python -c "import sys,json,base64; open('debug.jpg','wb').write(base64.b64decode(json.load(sys.stdin)['debug_image_base64']))"
@@ -145,7 +195,7 @@ curl -X POST http://localhost:8000/recommend-size \
   -H "X-API-Key: change-me" \
   -H "Content-Type: application/json" \
   -d '{
-    "measurements": {"shoulder_cm": 44.1, "chest_cm": 96.5, "waist_cm": 84.0, "torso_cm": 62.3, "arm_cm": 60.2, "leg_cm": 81.7},
+    "measurements": {"shoulder_cm": 44.0, "chest_cm": 95.0, "waist_cm": 83.0, "torso_cm": 46.5, "arm_cm": 60.0, "leg_cm": 82.0},
     "size_chart": {
       "S": {"chest": [86, 92], "waist": [74, 80], "length": [68, 70], "shoulder": [41, 43]},
       "M": {"chest": [92, 98], "waist": [80, 86], "length": [70, 72], "shoulder": [43, 45]},
@@ -154,8 +204,9 @@ curl -X POST http://localhost:8000/recommend-size \
     "category": "upper_body",
     "fit_preference": "regular"
   }'
+# → {"recommended_size":"M","per_size":{"S":{"score":0.43,"note":"Tight at chest and waist, ..."}, "M":{"score":0.99,"note":"Good fit"}, ...}}
 
-# Try-on with a garment URL
+# Try-on with a garment URL (TRYON_MOCK=true returns result_image_base64 instantly)
 curl -X POST http://localhost:8000/try-on \
   -H "X-API-Key: change-me" \
   -F "person_image=@photo.jpg" \
@@ -178,6 +229,53 @@ curl -X POST http://localhost:8000/analyze -H "X-API-Key: wrong" -F "image=@phot
 In PowerShell use `curl.exe` (plain `curl` is an alias for `Invoke-WebRequest`) and put
 everything on one line, or replace `\` with a backtick.
 
+### Error codes
+
+| Code | HTTP | When |
+|---|---|---|
+| `UNAUTHORIZED` | 401 | Missing or wrong `X-API-Key` |
+| `INVALID_INPUT` | 422 | Bad fields, wrong file type, too large/small, unusable size chart |
+| `NO_PERSON_DETECTED` | 422 | No pose found |
+| `MULTIPLE_PEOPLE` | 422 | More than one person |
+| `PARTIAL_BODY` | 422 | Head, shoulders, hips or ankles hidden or cut off |
+| `FACE_NOT_FOUND` | 422 | In the contract, but `/analyze` returns 200 + a warning instead (see above) |
+| `RATE_LIMITED` | 429 | Too many try-ons this minute (**added**, not in the original contract table) |
+| `TRYON_FAILED` | 502 | Provider error, or try-on not configured |
+| `TRYON_TIMEOUT` | 504 | Provider took more than 120 s |
+| `INTERNAL_ERROR` | 500 | Anything else |
+
+---
+
+## Production
+
+### Docker
+```bash
+docker build -t trymate-ai .
+docker run --rm -p 8000:8000 --env-file .env trymate-ai
+```
+- Python 3.13 slim + `libgl1`/`libglib2.0-0` (needed by the OpenCV build that MediaPipe uses).
+- Models (pose heavy + face landmarker) are downloaded **at build time**.
+- Runs as a non-root user, `LOG_FORMAT=json`, one worker, a `HEALTHCHECK` on `/health`.
+- The Dockerfile hasn't been built yet: Docker isn't installed on the development machine.
+
+### Logging and request ids
+- Every request gets an id: the caller's `X-Request-ID` (the store can send one), or a new one.
+  It's returned in the `X-Request-ID` response header and included in every log line.
+- One access-log line per request (method, path, status, duration). **No bodies, no image
+  bytes, no API keys** are ever logged.
+
+### Deployment notes
+- **Memory:** with both models loaded the process uses ~255 MB resident / ~690 MB committed,
+  and more while analysing a photo. Use an instance with **at least 1 GB RAM** (Render
+  "Standard", Railway 1 GB, or a small VM). Free 512 MB tiers will run out of memory.
+- **CPU:** one analysis takes ~0.1–0.5 s of CPU. Scale by running more containers, not more
+  workers per container (each worker loads its own models).
+- **Render / Railway:** deploy from the Dockerfile, set the env vars (at least
+  `SERVICE_API_KEY`, `REPLICATE_API_TOKEN` or `TRYON_MOCK=true`). The platform sets `PORT`.
+- **Small VM:** `docker run -d --restart unless-stopped -p 8000:8000 --env-file .env trymate-ai`.
+- **Security:** keep the service private if the platform allows it (only the store's server
+  needs to reach it); otherwise rely on a long random `SERVICE_API_KEY`. CORS is intentionally off.
+
 ---
 
 ## Project layout
@@ -185,59 +283,72 @@ everything on one line, or replace `\` with a backtick.
 ```
 tryMate-Ai/
 ├── app/
-│   ├── main.py            # creates the FastAPI app: middleware, error handlers, routers
-│   ├── config.py          # settings from .env + fixed limits (10 MB uploads)
-│   ├── security.py        # X-API-Key dependency
-│   ├── errors.py          # ErrorCode, AppError, handlers → {error_code, message}
-│   ├── middleware.py      # request-size limit (keeps in-memory uploads bounded)
-│   ├── schemas.py         # Pydantic models = the API contract
-│   ├── routers/           # health, analyze, sizing, tryon (thin: validate → call services)
+│   ├── main.py             # creates the FastAPI app: middleware, error handlers, routers, model warm-up
+│   ├── config.py           # settings from .env + fixed limits (10 MB uploads)
+│   ├── security.py         # X-API-Key dependency
+│   ├── errors.py           # ErrorCode, AppError, handlers → {error_code, message}
+│   ├── middleware.py       # request-size limit (keeps in-memory uploads bounded)
+│   ├── logging_setup.py    # JSON logs, request ids, access log
+│   ├── rate_limit.py       # sliding-window limiter for /try-on
+│   ├── schemas.py          # Pydantic models = the API contract
+│   ├── routers/            # health, analyze, sizing, tryon (thin: validate → call services)
 │   ├── services/
-│   │   ├── image_io.py    # in-memory upload validation + decode (EXIF rotation, resize)
-│   │   ├── pose.py        # MediaPipe PoseLandmarker + person checks
-│   │   ├── measurements.py # landmarks + mask + height → cm (the maths, explained)
-│   │   ├── body_analysis.py # decode → pose → measure, used by /analyze
-│   │   └── debug_image.py # draws landmarks and measured lines (debug=true)
-│   └── tryon/             # try-on providers (Phase 5)
-├── models/                # MediaPipe .task files (gitignored; scripts/download_models.py)
+│   │   ├── image_io.py     # upload validation + decode (EXIF rotation, resize)
+│   │   ├── pose.py         # MediaPipe PoseLandmarker + person checks
+│   │   ├── measurements.py # landmarks + mask + height → cm
+│   │   ├── face.py         # head crop + MediaPipe FaceLandmarker
+│   │   ├── skin_tone.py    # face → tone (ITA), undertone, hex
+│   │   ├── colors.py       # tone + undertone → 8 named colours
+│   │   ├── sizing.py       # measurements + size chart → scores and notes
+│   │   ├── body_analysis.py # the /analyze pipeline
+│   │   └── debug_image.py  # draws what was measured (debug=true)
+│   └── tryon/
+│       ├── base.py         # TryOnProvider interface
+│       ├── replicate_idm.py # IDM-VTON on Replicate (timeout, cancel, retry once)
+│       └── mock.py         # free local placeholder
+├── models/                 # MediaPipe model files (gitignored; scripts/download_models.py)
 ├── scripts/download_models.py
-├── tests/                 # pytest; images + a synthetic "paper doll" person (fakes.py) are generated in memory
-│   └── images/            # your own photos for Phase 2+ (gitignored)
+├── tests/                  # pytest; images, a synthetic "paper doll" person and a fake face are generated in memory
+├── Dockerfile, .dockerignore
 ├── .env.example
-├── requirements.txt       # runtime packages
-├── requirements-dev.txt   # + pytest, httpx2
+├── requirements.txt        # runtime packages
+├── requirements-dev.txt    # + pytest, httpx2
 └── pytest.ini
 ```
-
-Planned (added in later phases): `services/skin_tone.py`,
-`services/colors.py`, `services/sizing.py`, `tryon/base.py`, `tryon/replicate_idm.py`, `tryon/mock.py`, `Dockerfile`.
 
 ---
 
 ## Implementation notes
 
-- **Photos never touch disk.** Starlette normally writes uploads over 1 MB to a temp
-  file. `app/main.py` (`keep_uploads_in_memory`) raises that threshold above the max
-  request size, and `BodySizeLimitMiddleware` caps requests at 21 MB (two 10 MB images +
-  form fields), so uploads always stay in RAM. There's a test for it.
+- **Photos never touch disk.** Starlette normally writes uploads over 1 MB to a temp file;
+  `keep_uploads_in_memory()` raises that threshold above the max request size, and
+  `BodySizeLimitMiddleware` caps requests at 21 MB, so uploads always stay in RAM (tested).
 - **File type is checked from the bytes**, not the `Content-Type` header or file name.
-- **Validation errors** (bad fields, bad JSON, too large) all become
-  `422 {"error_code": "INVALID_INPUT", "message": "<field>: <reason>"}`.
-- **Unknown routes** return `404` in the same error shape.
-- **`/try-on`** requires exactly one of `garment_image` / `garment_image_url`; sending both is
-  `INVALID_INPUT`, so it's always clear which one was used.
-- **OpenCV package:** `mediapipe` 1.0.1 depends on `opencv-contrib-python`. Don't also install
-  `opencv-python-headless`: both install into the same `cv2` folder and break each other.
-  For Docker (Phase 6) the non-headless build needs `libgl1` + `libglib2.0-0` in the image.
+- **MediaPipe crash workaround:** MediaPipe 1.0.1 aborts the whole process when reading the
+  segmentation mask of an image whose width isn't a multiple of 4. `pose.py` pads the image
+  by up to 3 columns first (tested).
+- **OpenCV package:** `mediapipe` depends on `opencv-contrib-python`. Don't also install
+  `opencv-python-headless`: both write to the same `cv2` folder and break each other.
+- **`/try-on`** requires exactly one of `garment_image` / `garment_image_url`.
+- **Validation errors** all become `422 INVALID_INPUT` with a `"<field>: <reason>"` message;
+  unknown routes return `404` in the same error shape.
 
-## Open decisions (for R&D)
+## Decisions made (were open questions)
 
-These are marked in the code and are yours to decide:
+1. **FACE_NOT_FOUND** → 200 with `skin_tone: null`, `color_suggestions: []` + warning.
+2. **Tone labels** → `fair`, `light`, `medium`, `tan`, `brown`, `deep` (ITA bands).
+3. **Size chart fields** → `chest`, `waist`, `shoulder`, `length`, `inseam`; others ignored.
+4. **Pose model** → heavy.
+5. **Try-on model** → IDM-VTON on Replicate (non-commercial licence!), behind a provider interface.
+6. **Rate limiting** → global per-minute cap here; per-user limit in the store.
 
-1. **FACE_NOT_FOUND**: fail the whole `/analyze`, or return measurements with
-   `skin_tone: null`, `color_suggestions: []` and a warning? The schema already allows
-   `skin_tone: null`, so both options fit without a contract change.
-2. **Skin `tone` labels**: a plain string for now; pick a fixed list in Phase 3.
-3. **Size chart field names**: any name is accepted (`chest`, `waist`, `length`, `shoulder`,
-   and later e.g. `hip`, `inseam` for lower body). Scoring rules come in Phase 4.
-4. ~~**Pose model**~~: decided in Phase 2: **heavy** (most accurate, still ~70 ms per photo). Change with `POSE_MODEL`.
+## What still needs you
+
+1. **Calibrate measurements** against a tape measure: scan yourself with `debug=true`, compare,
+   then tune `SHOULDER_WIDTH_FACTOR`, `CHEST_LEVEL` / `WAIST_LEVEL`, `DIP_THRESHOLD`
+   (`measurements.py`) and `LENGTH_PER_TORSO` (`sizing.py`).
+2. **Check skin tone** on 2–3 daylight photos of yourself; tune `UNDERTONE_COOL_BELOW` /
+   `UNDERTONE_WARM_ABOVE` (`skin_tone.py`) if the undertone looks off.
+3. **One real try-on:** set `REPLICATE_API_TOKEN`, `TRYON_MOCK=false`, and call `/try-on` with a
+   shirt image (costs ~$0.02). The Replicate code is tested only against a fake client.
+4. **`docker build`** on a machine with Docker, then run the image and hit `/health`.

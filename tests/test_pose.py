@@ -70,3 +70,39 @@ def test_missing_model_file_gives_a_clear_error(monkeypatch, tmp_path):
     with pytest.raises(AppError) as info:
         PoseDetector("heavy")
     assert "download_models.py" in info.value.message
+
+
+# ---- MediaPipe mask-width workaround ---------------------------------------------------
+
+
+@pytest.mark.parametrize("width", [600, 601, 602, 603])
+def test_images_are_padded_to_a_width_multiple_of_4(width):
+    from app.services.pose import pad_width_to_multiple_of_4
+
+    image = np.zeros((100, width, 3), np.uint8)
+    padded = pad_width_to_multiple_of_4(image)
+    assert padded.shape[1] % 4 == 0
+    assert 0 <= padded.shape[1] - width <= 3
+    assert padded.shape[0] == 100
+
+
+def test_detector_always_passes_a_width_multiple_of_4(monkeypatch):
+    """Guards against a MediaPipe crash (see pad_width_to_multiple_of_4)."""
+    seen = {}
+
+    class SpyLandmarker:
+        def detect(self, mp_image):
+            seen["width"] = mp_image.width
+
+            class Empty:
+                pose_landmarks, segmentation_masks = [], []
+
+            return Empty()
+
+    detector = PoseDetector.__new__(PoseDetector)  # skip loading the real model
+    detector._landmarker = SpyLandmarker()
+    import threading
+
+    detector._lock = threading.Lock()
+    detector.detect(np.zeros((500, 301, 3), np.uint8))
+    assert seen["width"] % 4 == 0

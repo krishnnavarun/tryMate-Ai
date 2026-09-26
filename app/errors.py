@@ -25,6 +25,7 @@ class ErrorCode(StrEnum):
     FACE_NOT_FOUND = "FACE_NOT_FOUND"
     TRYON_FAILED = "TRYON_FAILED"
     TRYON_TIMEOUT = "TRYON_TIMEOUT"
+    RATE_LIMITED = "RATE_LIMITED"  # added in Phase 6 (not in the original contract table)
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -38,6 +39,7 @@ STATUS_BY_CODE: dict[ErrorCode, int] = {
     ErrorCode.FACE_NOT_FOUND: 422,
     ErrorCode.TRYON_FAILED: 502,
     ErrorCode.TRYON_TIMEOUT: 504,
+    ErrorCode.RATE_LIMITED: 429,
     ErrorCode.INTERNAL_ERROR: 500,
 }
 
@@ -50,6 +52,7 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.FACE_NOT_FOUND: "No face found in the photo.",
     ErrorCode.TRYON_FAILED: "The try-on provider returned an error.",
     ErrorCode.TRYON_TIMEOUT: "The try-on provider took too long to respond.",
+    ErrorCode.RATE_LIMITED: "Too many try-on requests right now. Please try again in a minute.",
     ErrorCode.INTERNAL_ERROR: "Something went wrong on our side.",
 }
 

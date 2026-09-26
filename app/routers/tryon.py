@@ -5,14 +5,15 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile
 from pydantic import AnyHttpUrl
 
 from app.errors import AppError, ErrorCode
+from app.rate_limit import limit_tryon
 from app.routers import COMMON_ERROR_RESPONSES
 from app.schemas import Category, ErrorResponse, TryOnResponse
 from app.security import require_api_key
 from app.services.image_io import read_image_upload
+from app.tryon import get_tryon_provider
+from app.tryon.base import TryOnProvider, TryOnRequest
 
 router = APIRouter(tags=["try-on"], dependencies=[Depends(require_api_key)])
-
-_STUB_RESULT_URL = "https://placehold.co/768x1024/png?text=Try-on+stub"
 
 
 @router.post(
@@ -20,14 +21,22 @@ _STUB_RESULT_URL = "https://placehold.co/768x1024/png?text=Try-on+stub"
     response_model=TryOnResponse,
     responses={
         **COMMON_ERROR_RESPONSES,
+        429: {"model": ErrorResponse, "description": "RATE_LIMITED: too many try-ons this minute"},
         502: {"model": ErrorResponse, "description": "TRYON_FAILED"},
         504: {"model": ErrorResponse, "description": "TRYON_TIMEOUT"},
     },
     summary="Image of the person wearing the garment (shows the look, not the fit)",
+    description=(
+        "Send `garment_image` **or** `garment_image_url` (exactly one). Takes ~10–60 s with the "
+        "real provider (timeout 120 s). Exactly one of `result_image_url` / `result_image_base64` "
+        "is set. This shows how the garment LOOKS; fit comes from /recommend-size."
+    ),
 )
 async def try_on(
     person_image: Annotated[UploadFile, File(description="Photo of the person. JPEG, PNG or WEBP, max 10 MB.")],
     category: Annotated[Category, Form()],
+    provider: Annotated[TryOnProvider, Depends(get_tryon_provider)],
+    _rate_limit: Annotated[None, Depends(limit_tryon)],
     garment_image: Annotated[
         UploadFile | None, File(description="Garment photo. Send this OR garment_image_url.")
     ] = None,
@@ -46,17 +55,18 @@ async def try_on(
     if garment_image is not None and garment_image_url is not None:
         raise AppError(ErrorCode.INVALID_INPUT, "Send only one of garment_image or garment_image_url, not both.")
 
-    await read_image_upload(person_image, "person_image")
-    if garment_image is not None:
-        await read_image_upload(garment_image, "garment_image")
+    request = TryOnRequest(
+        person_image=await read_image_upload(person_image, "person_image"),
+        category=category,
+        garment_image=await read_image_upload(garment_image, "garment_image") if garment_image else None,
+        garment_image_url=str(garment_image_url) if garment_image_url else None,
+        garment_description=garment_description,
+    )
+    result = await provider.run(request)
 
-    # ---- PHASE 1 STUB -------------------------------------------------------
-    # Returns a placeholder image URL. Phase 5 adds the provider interface,
-    # Replicate IDM-VTON, the mock provider (TRYON_MOCK) and timeouts/retries.
-    latency_ms = int((time.perf_counter() - started) * 1000)
     return TryOnResponse(
-        result_image_url=_STUB_RESULT_URL,
-        result_image_base64=None,
-        latency_ms=latency_ms,
-        provider="stub",
+        result_image_url=result.image_url,
+        result_image_base64=result.image_base64,
+        latency_ms=int((time.perf_counter() - started) * 1000),
+        provider=provider.name,
     )

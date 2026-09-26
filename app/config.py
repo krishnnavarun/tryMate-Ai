@@ -40,10 +40,16 @@ class Settings(BaseSettings):
     tryon_provider: Literal["replicate_idm", "catvton", "mock"] = "replicate_idm"
     tryon_mock: bool = False
     log_level: Literal["debug", "info", "warning", "error", "critical"] = "info"
+    # text = readable lines for development; json = one JSON object per line (production)
+    log_format: Literal["text", "json"] = "text"
     port: int = 8000
     # MediaPipe pose model: heavy is the most accurate (we analyse one photo, so its
     # extra ~0.5 s doesn't matter); full/lite use less CPU and memory.
     pose_model: Literal["lite", "full", "heavy"] = "heavy"
+    # Pin a Replicate IDM-VTON version id; empty = use the model's latest version
+    replicate_idm_version: str = ""
+    # Global cap on /try-on calls per minute (safety net against runaway costs); 0 = off
+    tryon_rate_limit_per_minute: int = 30
 
     @field_validator("log_level", mode="before")
     @classmethod

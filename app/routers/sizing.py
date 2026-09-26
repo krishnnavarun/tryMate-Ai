@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends
 
 from app.routers import COMMON_ERROR_RESPONSES
-from app.schemas import RecommendSizeRequest, RecommendSizeResponse, SizeFit
+from app.schemas import RecommendSizeRequest, RecommendSizeResponse
 from app.security import require_api_key
+from app.services.sizing import recommend_size as score_sizes
 
 router = APIRouter(tags=["sizing"], dependencies=[Depends(require_api_key)])
 
@@ -12,24 +13,13 @@ router = APIRouter(tags=["sizing"], dependencies=[Depends(require_api_key)])
     response_model=RecommendSizeResponse,
     responses=COMMON_ERROR_RESPONSES,
     summary="Best size + a fit note for every size in the chart",
+    description=(
+        "Scores every size in `size_chart` against the measurements. Chart fields used: "
+        "`chest`, `waist`, `shoulder`, `length` (tops/dresses) and `inseam` (lower body); "
+        "others are ignored. `fit_preference` shifts what counts as ideal "
+        "(slim = snug, loose = roomy)."
+    ),
 )
-async def recommend_size(body: RecommendSizeRequest) -> RecommendSizeResponse:
-    # ---- PHASE 1 STUB -------------------------------------------------------
-    # Ignores the measurements: picks the middle size of the chart and scores the
-    # others lower the further away they are. Phase 4 replaces this with real scoring.
-    sizes = list(body.size_chart.keys())
-    middle = len(sizes) // 2
-
-    per_size: dict[str, SizeFit] = {}
-    for index, size in enumerate(sizes):
-        distance = index - middle
-        score = max(0.1, 0.93 - 0.25 * abs(distance))
-        if distance == 0:
-            note = "Good fit"
-        elif distance < 0:
-            note = "Stub: likely tight"
-        else:
-            note = "Stub: likely loose"
-        per_size[size] = SizeFit(score=round(score, 2), note=note)
-
-    return RecommendSizeResponse(recommended_size=sizes[middle], per_size=per_size)
+def recommend_size(body: RecommendSizeRequest) -> RecommendSizeResponse:
+    # Plain `def` (not async): FastAPI runs it in a worker thread. It's quick maths anyway.
+    return score_sizes(body)

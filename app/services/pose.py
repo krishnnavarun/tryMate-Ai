@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from enum import IntEnum
 from functools import lru_cache
 
+import cv2
 import mediapipe as mp
 import numpy as np
 from mediapipe.tasks.python import BaseOptions, vision
@@ -121,22 +122,43 @@ class PoseDetector:
     def detect(self, image_rgb: np.ndarray) -> list[Pose]:
         """Return every person found (0, 1 or 2), with landmarks in pixels."""
         height, width = image_rgb.shape[:2]
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(image_rgb))
+        padded = pad_width_to_multiple_of_4(image_rgb)
+        padded_width = padded.shape[1]
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(padded))
         with self._lock:
             result = self._landmarker.detect(mp_image)
 
         poses = []
         for i, normalised in enumerate(result.pose_landmarks):
+            # Landmarks are normalised to the padded image; padding is only on the right,
+            # so converting with the padded width gives the right pixel positions.
             landmarks = [
-                Landmark(x=lm.x * width, y=lm.y * height, z=lm.z * width, visibility=lm.visibility or 0.0)
+                Landmark(
+                    x=lm.x * padded_width, y=lm.y * height, z=lm.z * padded_width, visibility=lm.visibility or 0.0
+                )
                 for lm in normalised
             ]
             mask = None
             if result.segmentation_masks and i < len(result.segmentation_masks):
-                # numpy_view() is read-only and owned by MediaPipe: copy it
+                # numpy_view() is read-only and owned by MediaPipe: copy it, drop the padding
                 mask = np.array(result.segmentation_masks[i].numpy_view(), dtype=np.float32).squeeze()
+                mask = mask[:, :width]
             poses.append(Pose(landmarks=landmarks, mask=mask, width=width, height=height))
         return poses
+
+
+def pad_width_to_multiple_of_4(image: np.ndarray) -> np.ndarray:
+    """Pad the right edge (repeating the last column) so the width is a multiple of 4.
+
+    Works around a MediaPipe 1.0.1 bug: reading the segmentation mask of an image whose
+    width is NOT a multiple of 4 aborts the whole Python process
+    ("Check failed: 1 == ChannelSize()"), because the mask rows get padded internally.
+    At most 3 columns are added, far from the person, so results don't change.
+    """
+    extra = (-image.shape[1]) % 4
+    if extra == 0:
+        return image
+    return cv2.copyMakeBorder(image, 0, 0, 0, extra, cv2.BORDER_REPLICATE)
 
 
 @lru_cache

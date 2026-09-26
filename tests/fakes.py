@@ -86,3 +86,30 @@ class FakeDetector:
 
     def detect(self, _image: np.ndarray) -> list[Pose]:
         return self.poses
+
+
+# ---- Face ------------------------------------------------------------------------------
+
+
+def make_face() -> "Face":
+    """Face-mesh points on the doll's head (only the ones skin_tone.py uses are placed)."""
+    from app.services.face import FACE_LEFT_EDGE, FACE_RIGHT_EDGE, Face
+    from app.services.skin_tone import SAMPLE_POINTS
+
+    points = np.tile(np.array([300.0, 120.0]), (478, 1))
+    points[SAMPLE_POINTS["forehead"]] = (300, 95)
+    points[SAMPLE_POINTS["right_cheek"]] = (280, 130)
+    points[SAMPLE_POINTS["left_cheek"]] = (320, 130)
+    points[FACE_RIGHT_EDGE] = (260, 120)
+    points[FACE_LEFT_EDGE] = (340, 120)
+    return Face(points=points, width_px=80.0)
+
+
+class FakeFaceFinder:
+    """Stands in for FaceFinder: returns the given face (or None = no face found)."""
+
+    def __init__(self, face) -> None:
+        self.face = face
+
+    def find(self, _image: np.ndarray, _pose: Pose):
+        return self.face

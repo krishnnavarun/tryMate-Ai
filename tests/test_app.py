@@ -64,3 +64,33 @@ def test_openapi_lists_all_endpoints_and_models(client):
 
     # X-API-Key shows up as a security scheme ("Authorize" button in /docs)
     assert "APIKeyHeader" in spec["components"]["securitySchemes"]
+
+
+# ---- request ids and logging -------------------------------------------------------------
+
+
+def test_every_response_has_a_request_id(client):
+    assert len(client.get("/health").headers["x-request-id"]) >= 8
+
+
+def test_callers_request_id_is_reused(client):
+    assert client.get("/health", headers={"X-Request-ID": "store-abc-123"}).headers["x-request-id"] == "store-abc-123"
+
+
+def test_unsafe_request_id_is_replaced(client):
+    rid = client.get("/health", headers={"X-Request-ID": "bad id\nwith newline"}).headers["x-request-id"]
+    assert " " not in rid and "\n" not in rid
+
+
+def test_json_log_lines_carry_request_id_and_no_bodies(client, caplog):
+    import json
+    import logging
+
+    from app.logging_setup import JsonFormatter
+
+    with caplog.at_level(logging.INFO, logger="app.access"):
+        client.post("/recommend-size", headers={**AUTH, "X-Request-ID": "rid-42"}, json={"secret": "x" * 50})
+    record = next(r for r in caplog.records if r.name == "app.access")
+    line = json.loads(JsonFormatter().format(record))
+    assert line["path"] == "/recommend-size" and line["status"] == 422 and "duration_ms" in line
+    assert "x" * 50 not in json.dumps(line)

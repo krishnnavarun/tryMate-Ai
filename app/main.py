@@ -16,8 +16,10 @@ from starlette.formparsers import MultiPartParser
 from app import __version__
 from app.config import MAX_REQUEST_BYTES, get_settings
 from app.errors import AppError, register_error_handlers
+from app.logging_setup import RequestContextMiddleware, configure_logging
 from app.middleware import BodySizeLimitMiddleware
 from app.routers import analyze, health, sizing, tryon
+from app.services.face import get_face_finder
 from app.services.pose import get_pose_detector
 
 logger = logging.getLogger("app")
@@ -35,30 +37,24 @@ def keep_uploads_in_memory() -> None:
     MultiPartParser.spool_max_size = MAX_REQUEST_BYTES + 1024 * 1024
 
 
-def configure_logging(level: str) -> None:
-    logging.basicConfig(
-        level=level.upper(),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-
-
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Runs once at startup: load the pose model now, so the first /analyze isn't slow.
+    """Runs once at startup: load the pose + face models now, so the first /analyze isn't slow.
 
-    If the model file is missing we only log it: /health keeps working, and /analyze
+    If a model file is missing we only log it: /health keeps working, and /analyze
     answers with a clear INTERNAL_ERROR message until the model is downloaded.
     """
-    try:
-        await run_in_threadpool(get_pose_detector)
-    except AppError as err:
-        logger.error(err.message)
+    for load in (get_pose_detector, get_face_finder):
+        try:
+            await run_in_threadpool(load)
+        except AppError as err:
+            logger.error(err.message)
     yield
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    configure_logging(settings.log_level)
+    configure_logging(settings.log_level, json_logs=settings.log_format == "json")
     keep_uploads_in_memory()
 
     if settings.service_api_key == "change-me":
@@ -80,6 +76,8 @@ def create_app() -> FastAPI:
     # No CORS middleware on purpose: only the Express server calls this service
     # (server-to-server), so browsers should never be allowed to.
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_REQUEST_BYTES)
+    # Added last = runs first: every request (even rejected ones) gets an id + access log line
+    app.add_middleware(RequestContextMiddleware)
     register_error_handlers(app)
 
     app.include_router(health.router)

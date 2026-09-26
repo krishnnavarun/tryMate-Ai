@@ -25,7 +25,12 @@ MEASURE_COLOR = (60, 60, 255)
 MASK_TINT = np.array([80, 200, 80], dtype=np.float32)
 
 
-def render_debug_image(image_rgb: np.ndarray, pose: Pose, result: MeasurementResult) -> str:
+def render_debug_image(
+    image_rgb: np.ndarray,
+    pose: Pose,
+    result: MeasurementResult,
+    skin_circles: list[tuple[float, float, float]] | None = None,
+) -> str:
     image = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
     thickness = max(1, round(max(image.shape[:2]) / 500))
 
@@ -54,6 +59,10 @@ def render_debug_image(image_rgb: np.ndarray, pose: Pose, result: MeasurementRes
         # Dark outline behind the text so it's readable on any background
         cv2.putText(image, line.label, text_at, cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
         cv2.putText(image, line.label, text_at, cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+
+    # Where skin colour was sampled (forehead + cheeks)
+    for x, y, radius in skin_circles or []:
+        cv2.circle(image, pt((x, y)), max(1, int(round(radius))), (255, 0, 255), 1, cv2.LINE_AA)
 
     ok, buffer = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 85])
     if not ok:
