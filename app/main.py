@@ -38,17 +38,26 @@ def keep_uploads_in_memory() -> None:
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
+async def lifespan(app: FastAPI):
     """Runs once at startup: load the pose + face models now, so the first /analyze isn't slow.
 
-    If a model file is missing we only log it: /health keeps working, and /analyze
-    answers with a clear INTERNAL_ERROR message until the model is downloaded.
+    If a model can't be loaded we only log it: /health keeps working, and /analyze answers
+    with an error until it's fixed. Two known causes:
+      - the model file is missing (AppError with a clear message: run download_models.py)
+      - on Linux, a system library MediaPipe needs is missing, e.g.
+        "OSError: libGLESv2.so.2: cannot open shared object file" (install libegl1 libgles2)
+
+    Tests replace the detectors with fakes through app.dependency_overrides; the same
+    overrides are used here, so the unit tests never load the real models.
     """
-    for load in (get_pose_detector, get_face_finder):
+    for dependency in (get_pose_detector, get_face_finder):
+        load = app.dependency_overrides.get(dependency, dependency)
         try:
             await run_in_threadpool(load)
         except AppError as err:
             logger.error(err.message)
+        except Exception:
+            logger.exception("Could not load a model at startup (%s)", dependency.__name__)
     yield
 
 

@@ -7,8 +7,8 @@ size recommendation and virtual try-on. Only the store's Express server calls it
 (server-to-server, `X-API-Key` header). The full spec is in [PROJECT_SPEC.md](PROJECT_SPEC.md).
 
 > **Status: Phases 1–6 built.** All four endpoints are real. What's left needs you:
-> calibrating measurements against a tape measure, one real Replicate try-on (needs a token),
-> and a `docker build` on a machine with Docker. See [What still needs you](#what-still-needs-you).
+> calibrating measurements against a tape measure and one real Replicate try-on (needs a token).
+> See [What still needs you](#what-still-needs-you).
 
 | Endpoint | Auth | What it does |
 |---|---|---|
@@ -137,6 +137,17 @@ cp .env.example .env              # macOS / Linux
 python scripts/download_models.py
 ```
 
+**Linux (Debian/Ubuntu) only:** MediaPipe and OpenCV need a few system libraries, even
+without a screen or GPU. Windows and macOS need nothing extra.
+
+```bash
+sudo apt-get install -y libgl1 libglib2.0-0 libegl1 libgles2
+```
+
+Without `libegl1`/`libgles2`, loading a model fails with
+`OSError: libGLESv2.so.2: cannot open shared object file`. The service still starts and
+`/health` answers, but the log shows the error and `/analyze` fails until they're installed.
+
 The MERN mapping: `.venv` ≈ `node_modules`, `requirements.txt` ≈ `package.json`
 dependencies, `pip install -r` ≈ `npm install`, `pytest` ≈ `jest`.
 
@@ -152,11 +163,15 @@ uvicorn app.main:app --reload --port 8000
 ## Test
 
 ```bash
-pytest          # 164 tests, a few seconds; never calls Replicate
+pytest          # 165 tests, a few seconds; never calls Replicate
 ```
 
+The API tests use fake detectors (also at startup), so only a handful of tests load the real
+MediaPipe models.
+
 **CI** (`.github/workflows/ci.yml`) runs on every push to `main` and every pull request:
-- `test`: installs the requirements on Ubuntu, downloads the models (cached), runs `pytest`.
+- `test`: installs the system libraries and the requirements on Ubuntu, downloads the models
+  (cached), runs `pytest`.
 - `docker`: builds the Docker image, starts it and smoke-tests the running container (`/health`,
   the API key check, `/recommend-size`, and `/analyze` running MediaPipe on an empty picture).
 
@@ -260,10 +275,15 @@ everything on one line, or replace `\` with a backtick.
 docker build -t trymate-ai .
 docker run --rm -p 8000:8000 --env-file .env trymate-ai
 ```
-- Python 3.13 slim + `libgl1`/`libglib2.0-0` (needed by the OpenCV build that MediaPipe uses).
+- Python 3.13 slim + `libgl1`/`libglib2.0-0` (the OpenCV build that MediaPipe uses) and
+  `libegl1`/`libgles2` (MediaPipe's native library links against `libEGL` and `libGLESv2`).
 - Models (pose heavy + face landmarker) are downloaded **at build time**.
 - Runs as a non-root user, `LOG_FORMAT=json`, one worker, a `HEALTHCHECK` on `/health`.
-- The Dockerfile hasn't been built yet: Docker isn't installed on the development machine.
+- The Dockerfile hasn't been built on the development machine (no Docker there); the CI
+  `docker` job builds and smoke-tests it on every push.
+- **With the store:** `tryMate-store/docker-compose.yml` builds this image as its `ai` service
+  (`docker compose --profile ai up --build -d`, with this repo next to tryMate-store), so the whole
+  stack runs with one command. See the store README → "Docker".
 
 ### Logging and request ids
 - Every request gets an id: the caller's `X-Request-ID` (the store can send one), or a new one.
@@ -358,4 +378,5 @@ tryMate-Ai/
    `UNDERTONE_WARM_ABOVE` (`skin_tone.py`) if the undertone looks off.
 3. **One real try-on:** set `REPLICATE_API_TOKEN`, `TRYON_MOCK=false`, and call `/try-on` with a
    shirt image (costs ~$0.02). The Replicate code is tested only against a fake client.
-4. **`docker build`** on a machine with Docker, then run the image and hit `/health`.
+4. **Check the CI `docker` job is green** after pushing (Actions tab). It builds the image and
+   smoke-tests it; its first run failed on two missing Linux libraries, now fixed.

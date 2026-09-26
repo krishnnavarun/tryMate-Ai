@@ -25,9 +25,10 @@ jobs:
           cache: pip
           cache-dependency-path: requirements*.txt
 
-      # opencv-contrib-python (a mediapipe dependency) needs these system libraries
-      - name: System libraries for OpenCV
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+      # opencv-contrib-python (a mediapipe dependency) needs libgl1 + libglib2.0-0;
+      # MediaPipe's native library needs libEGL.so.1 + libGLESv2.so.2 (see the Dockerfile)
+      - name: System libraries for OpenCV and MediaPipe
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libegl1 libgles2
 
       - name: Install dependencies
         run: pip install -r requirements-dev.txt

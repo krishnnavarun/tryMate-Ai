@@ -4,10 +4,13 @@
 
 FROM python:3.13-slim
 
-# opencv-contrib-python (pulled in by mediapipe) is the non-headless OpenCV build,
-# which needs these system libraries even though we never open a window.
+# System libraries, needed even though we never open a window or use a GPU:
+#   libgl1, libglib2.0-0  opencv-contrib-python (pulled in by mediapipe) is the non-headless build
+#   libegl1, libgles2     MediaPipe's native library (libmediapipe.so) links against libEGL.so.1
+#                         and libGLESv2.so.2; without them loading a model fails with
+#                         "OSError: libGLESv2.so.2: cannot open shared object file"
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
+    && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libegl1 libgles2 \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
