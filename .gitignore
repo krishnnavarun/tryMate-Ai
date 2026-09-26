@@ -21,6 +21,8 @@ models/*
 # Test photos are personal — keep them out of git unless you decide otherwise
 tests/images/*
 !tests/images/.gitkeep
+# Calibration photos + tape measurements (scripts/calibrate.py)
+calibration/
 
 # Editors / OS
 .vscode/

@@ -163,7 +163,7 @@ uvicorn app.main:app --reload --port 8000
 ## Test
 
 ```bash
-pytest          # 165 tests, a few seconds; never calls Replicate
+pytest          # 183 tests, a few seconds; never calls Replicate
 ```
 
 The API tests use fake detectors (also at startup), so only a handful of tests load the real
@@ -174,6 +174,47 @@ MediaPipe models.
   (cached), runs `pytest`.
 - `docker`: builds the Docker image, starts it and smoke-tests the running container (`/health`,
   the API key check, `/recommend-size`, and `/analyze` running MediaPipe on an empty picture).
+
+## Calibrating against a tape measure
+
+The measurement constants come from a survey (ANSUR II) and one test photo. To tune them for
+real people, `scripts/calibrate.py` compares the service with a tape measure and tells you
+which constant to change, and to what:
+
+```bash
+mkdir calibration                                   # gitignored: photos are personal
+cp scripts/calibration_template.csv calibration/samples.csv
+#   put 3-5 full-body photos in calibration/ and fill in samples.csv
+python scripts/calibrate.py calibration/samples.csv --debug-dir calibration/debug
+```
+
+- **For each photo:**
+  - shoulder, chest and waist: your tape value vs the service's;
+  - garment length: a well-fitting shirt vs the ideal length (`torso_cm × LENGTH_PER_TORSO`);
+  - your undertone vs the service's.
+
+  Photos the service would reject are skipped, with the same reason `/analyze` gives.
+- **Then one suggestion per constant:**
+
+  | Measurement | Constant | File |
+  |---|---|---|
+  | shoulder | `SHOULDER_WIDTH_FACTOR` | `app/services/measurements.py` |
+  | chest | `CHEST_CALIBRATION` | `app/services/measurements.py` |
+  | waist | `WAIST_CALIBRATION` | `app/services/measurements.py` |
+  | garment length | `LENGTH_PER_TORSO` | `app/services/sizing.py` |
+  | undertone | `UNDERTONE_COOL_BELOW` / `UNDERTONE_WARM_ABOVE` | `app/services/skin_tone.py` |
+
+- **How it's computed:** each measurement scales linearly with its constant, so the suggestion
+  is `current × median(tape ÷ measured)`. The median keeps one odd photo from pulling it far. It
+  also shows the error now and with the suggestion.
+- **Warnings:** fewer than 3 photos; photos that disagree by more than 8%; a change over 15%.
+  A big change usually means a tape or photo problem, not a wrong constant, so look at the
+  debug image.
+- **Left out:** chest/waist values the service had to estimate from shoulder width (arms too
+  close). `CHEST_LEVEL`, `WAIST_LEVEL` and `DIP_THRESHOLD` get no suggestions: with a few photos,
+  tuning them would only fit the noise.
+- Everything runs on your computer and nothing is uploaded. Change the constants, then run the
+  script again: the errors should shrink.
 
 ## Environment variables
 
@@ -334,7 +375,10 @@ tryMate-Ai/
 │       ├── replicate_idm.py # IDM-VTON on Replicate (timeout, cancel, retry once)
 │       └── mock.py         # free local placeholder
 ├── models/                 # MediaPipe model files (gitignored; scripts/download_models.py)
-├── scripts/download_models.py
+├── scripts/
+│   ├── download_models.py
+│   ├── calibrate.py        # photos + tape measurements → which constants to change
+│   └── calibration_template.csv
 ├── tests/                  # pytest; images, a synthetic "paper doll" person and a fake face are generated in memory
 ├── Dockerfile, .dockerignore
 ├── .env.example
@@ -371,12 +415,8 @@ tryMate-Ai/
 
 ## What still needs you
 
-1. **Calibrate measurements** against a tape measure: scan yourself with `debug=true`, compare,
-   then tune `SHOULDER_WIDTH_FACTOR`, `CHEST_LEVEL` / `WAIST_LEVEL`, `DIP_THRESHOLD`
-   (`measurements.py`) and `LENGTH_PER_TORSO` (`sizing.py`).
-2. **Check skin tone** on 2–3 daylight photos of yourself; tune `UNDERTONE_COOL_BELOW` /
-   `UNDERTONE_WARM_ABOVE` (`skin_tone.py`) if the undertone looks off.
-3. **One real try-on:** set `REPLICATE_API_TOKEN`, `TRYON_MOCK=false`, and call `/try-on` with a
+1. **Calibrate** with 3–5 photos and a tape measure: `python scripts/calibrate.py` (see
+   [Calibrating against a tape measure](#calibrating-against-a-tape-measure)). Fill in the
+   `undertone` column too, to check the skin-tone thresholds (use daylight photos).
+2. **One real try-on:** set `REPLICATE_API_TOKEN`, `TRYON_MOCK=false`, and call `/try-on` with a
    shirt image (costs ~$0.02). The Replicate code is tested only against a fake client.
-4. **Check the CI `docker` job is green** after pushing (Actions tab). It builds the image and
-   smoke-tests it; its first run failed on two missing Linux libraries, now fixed.

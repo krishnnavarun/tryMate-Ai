@@ -45,7 +45,8 @@ HOW IT WORKS
 Expected accuracy (honest): with a good photo (fitted clothes, arms slightly away, camera
 at chest height, facing straight on), roughly ±2–3 cm for lengths and ±4–8 cm for chest/
 waist circumference. Loose clothes, bad posture or a tilted camera make it worse.
-The constants below are the knobs to tune once you compare results with a measuring tape.
+The constants below are the knobs to tune once you compare results with a measuring tape;
+scripts/calibrate.py does the comparison and suggests the values.
 
 Constants are for men (the MVP catalogue is men's tops). Women's ANSUR II ratios are
 3.516 (chest) and 2.871 (waist).
@@ -74,6 +75,12 @@ LEG_PER_HEIGHT = 0.47  # hip joint → ankle ÷ stature (trochanter height 0.513
 # 0.816 × silhouette width across the deltoids came out 1.11–1.21× the landmark distance,
 # so 1.15 is the starting value. Adjust after comparing with real tape measurements.
 SHOULDER_WIDTH_FACTOR = 1.15
+# Your corrections for chest and waist measured from the silhouette (1.0 = no correction).
+# The ANSUR II ratios above stay as published; scripts/calibrate.py suggests these values
+# from photos + tape measurements. (They don't apply to the "estimated from shoulder
+# width" fallback, which is a different method.)
+CHEST_CALIBRATION = 1.0
+WAIST_CALIBRATION = 1.0
 MASK_THRESHOLD = 0.5  # mask value above which a pixel counts as "person"
 # A dip in the mask below this (between body and arm) marks a gap the mask blurred over
 DIP_THRESHOLD = 0.9
@@ -363,7 +370,7 @@ def measure(pose: Pose, height_cm: float) -> MeasurementResult:
         warnings.append(WARN_ARMS_CHEST)
         penalty *= 0.85
     else:
-        chest_breadth_cm = chest_px * cm_per_px
+        chest_breadth_cm = chest_px * cm_per_px * CHEST_CALIBRATION
     chest_cm = CHEST_CIRC_PER_BREADTH * chest_breadth_cm
 
     waist_px, waist_run = _breadth_px(pose, WAIST_LEVEL, shoulder_px)
@@ -372,7 +379,7 @@ def measure(pose: Pose, height_cm: float) -> MeasurementResult:
         warnings.append(WARN_ARMS_WAIST)
         penalty *= 0.85
     else:
-        waist_breadth_cm = waist_px * cm_per_px
+        waist_breadth_cm = waist_px * cm_per_px * WAIST_CALIBRATION
     waist_cm = WAIST_CIRC_PER_BREADTH * waist_breadth_cm
 
     for run, name, value, used in ((chest_run, "chest", chest_cm, chest_px), (waist_run, "waist", waist_cm, waist_px)):
