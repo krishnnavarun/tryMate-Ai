@@ -1,5 +1,7 @@
 # tryMate AI Service
 
+[![CI](https://github.com/krishnnavarun/tryMate-Ai/actions/workflows/ci.yml/badge.svg)](https://github.com/krishnnavarun/tryMate-Ai/actions/workflows/ci.yml)
+
 Python + FastAPI service for the tryMate store: body measurements, skin tone,
 size recommendation and virtual try-on. Only the store's Express server calls it
 (server-to-server, `X-API-Key` header). The full spec is in [PROJECT_SPEC.md](PROJECT_SPEC.md).
@@ -152,6 +154,11 @@ uvicorn app.main:app --reload --port 8000
 ```bash
 pytest          # 164 tests, a few seconds; never calls Replicate
 ```
+
+**CI** (`.github/workflows/ci.yml`) runs on every push to `main` and every pull request:
+- `test`: installs the requirements on Ubuntu, downloads the models (cached), runs `pytest`.
+- `docker`: builds the Docker image, starts it and smoke-tests the running container (`/health`,
+  the API key check, `/recommend-size`, and `/analyze` running MediaPipe on an empty picture).
 
 ## Environment variables
 

@@ -1,0 +1,92 @@
+# Runs on every push to main and on every pull request:
+#   test   – the pytest suite (with the MediaPipe models downloaded)
+#   docker – builds the Docker image, starts it, and smoke-tests the running container
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      # opencv-contrib-python (a mediapipe dependency) needs these system libraries
+      - name: System libraries for OpenCV
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      # The model files only change when the download script does
+      - name: Cache MediaPipe models
+        uses: actions/cache@v6
+        with:
+          path: models
+          key: mediapipe-models-${{ hashFiles('scripts/download_models.py') }}
+
+      - name: Download models
+        run: python scripts/download_models.py
+
+      - name: Run tests
+        run: pytest
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build image
+        run: docker build -t trymate-ai .
+
+      - name: Start container
+        run: |
+          docker run -d --name ai -p 8000:8000 \
+            -e SERVICE_API_KEY=ci-key -e TRYON_MOCK=true \
+            trymate-ai
+
+      - name: Wait for /health
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8000/health; then echo; exit 0; fi
+            sleep 2
+          done
+          echo "Service did not become healthy"; exit 1
+
+      - name: Smoke tests
+        run: |
+          set -e
+          # Every endpoint except /health needs the key
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8000/recommend-size -H 'Content-Type: application/json' -d '{}')" = 401
+
+          # Size recommendation (pure maths)
+          curl -fsS -X POST http://localhost:8000/recommend-size \
+            -H 'X-API-Key: ci-key' -H 'Content-Type: application/json' \
+            -d '{"measurements":{"shoulder_cm":44,"chest_cm":95,"waist_cm":83,"torso_cm":46.5,"arm_cm":60,"leg_cm":82},
+                 "size_chart":{"S":{"chest":[86,92]},"M":{"chest":[92,98]},"L":{"chest":[98,104]}},
+                 "category":"upper_body","fit_preference":"regular"}' | tee /dev/stderr | grep -q '"recommended_size":"M"'
+
+          # /analyze runs MediaPipe inside the container: an empty picture → NO_PERSON_DETECTED
+          docker exec ai python -c "import cv2, numpy as np, sys; sys.stdout.buffer.write(cv2.imencode('.jpg', np.full((800, 600, 3), 200, np.uint8))[1].tobytes())" > blank.jpg
+          curl -s -X POST http://localhost:8000/analyze -H 'X-API-Key: ci-key' \
+            -F image=@blank.jpg -F height_cm=175 | tee /dev/stderr | grep -q NO_PERSON_DETECTED
+          echo "Smoke tests passed"
+
+      - name: Container logs
+        if: always()
+        run: docker logs ai || true
