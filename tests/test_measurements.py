@@ -106,3 +106,16 @@ def test_debug_lines_are_produced():
     assert any(label.startswith("chest") for label in labels)
     assert any(label.startswith("waist") for label in labels)
     assert any(label.startswith("shoulder") for label in labels)
+
+
+def test_a_loose_top_is_flagged_but_still_measured():
+    pose = make_pose()
+    pose.mask[220:541, 190:410] = 1.0  # a baggy top: the torso outline 220 px wide instead of 140
+    result = M.measure(pose, HEIGHT_CM)
+    assert M.WARN_LOOSE in result.warnings
+    assert M.WARN_ARMS_CHEST not in result.warnings  # measured from the outline, not estimated
+    assert result.confidence < M.measure(make_pose(), HEIGHT_CM).confidence
+
+
+def test_a_fitted_top_is_not_flagged():
+    assert M.WARN_LOOSE not in M.measure(make_pose(), HEIGHT_CM).warnings

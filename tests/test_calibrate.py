@@ -158,7 +158,7 @@ def test_measures_a_photo_like_analyze_does_and_writes_a_debug_image(tmp_path, j
     r = measure_photo(sample, FakeDetector([make_pose()]), FakeFaceFinder(make_face()), debug_dir=tmp_path / "debug")
 
     assert r.error is None
-    assert set(r.measured) == {"shoulder_cm", "chest_cm", "waist_cm", "torso_cm"}
+    assert set(r.measured) == {"shoulder_cm", "chest_cm", "waist_cm", "torso_cm", "arm_cm"}
     expected = measurements.measure(make_pose(), 175).measurements
     assert r.measured["shoulder_cm"] == expected.shoulder_cm
     assert (tmp_path / "debug" / "me-debug.jpg").read_bytes()[:2] == b"\xff\xd8"  # a JPEG
@@ -172,3 +172,18 @@ def test_a_photo_that_fails_is_reported_not_fatal(tmp_path, jpeg_bytes):
 
     missing = measure_photo(Sample(tmp_path / "nope.jpg", 175, {}), FakeDetector([]), FakeFaceFinder(None))
     assert missing.error.startswith("file not found")
+
+
+def test_sleeves_are_calibrated_from_a_long_sleeve_shirt():
+    measured = {"shoulder_cm": 44.0, "chest_cm": 95.0, "waist_cm": 84.0, "torso_cm": 46.0, "arm_cm": 60.0}
+    results = [result({"sleeve_cm": 64.8}, measured) for _ in range(3)]
+    sleeve = next(s for s in suggest_measurements(results) if s.label == "sleeve")
+    # ideal sleeve = 60 × SLEEVE_PER_ARM; the shirt says 64.8 → SLEEVE_PER_ARM becomes 64.8 / 60
+    assert sleeve.constant == "SLEEVE_PER_ARM"
+    assert sleeve.suggested == round(64.8 / 60, 3)
+
+
+def test_estimated_arm_length_is_left_out():
+    measured = {"shoulder_cm": 44.0, "chest_cm": 95.0, "waist_cm": 84.0, "torso_cm": 46.0, "arm_cm": 60.0}
+    sleeve = next(s for s in suggest_measurements([result({"sleeve_cm": 64.0}, measured, estimated=["arm_cm"])]) if s.label == "sleeve")
+    assert sleeve.suggested is None

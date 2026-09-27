@@ -6,12 +6,13 @@
 # Tape (cm): shoulder_cm = across the back, one shoulder tip to the other
 #   chest_cm = around the fullest part of the chest, under the arms, tape level
 #   waist_cm = around the waist at navel height (not where your trousers sit)
+#   sleeve_cm = a long-sleeve shirt that fits you well: shoulder seam to the end of the cuff
 #   shirt_length_cm = a T-shirt that fits you well, laid flat: highest point of the
 #                     shoulder (next to the collar) straight down to the hem
 # undertone (optional): warm | neutral | cool, e.g. wrist veins look green = warm,
 #   blue/purple = cool, hard to say = neutral
 # Leave a cell empty if you don't have that value. The rows below are examples: replace them.
-photo,height_cm,shoulder_cm,chest_cm,waist_cm,shirt_length_cm,undertone
-front-1.jpg,178,46,98,86,72,warm
-front-2.jpg,178,46,98,86,72,warm
-front-3.jpg,178,46,98,86,,
+photo,height_cm,shoulder_cm,chest_cm,waist_cm,shirt_length_cm,sleeve_cm,undertone
+front-1.jpg,178,46,98,86,72,64,warm
+front-2.jpg,178,46,98,86,72,64,warm
+front-3.jpg,178,46,98,86,,,

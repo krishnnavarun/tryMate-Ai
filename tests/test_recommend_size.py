@@ -174,3 +174,77 @@ def test_malformed_json_is_invalid_input(client):
     )
     assert response.status_code == 422
     assert response.json()["error_code"] == "INVALID_INPUT"
+
+
+# ---- fit breakdown, between sizes, sleeves ----------------------------------------------
+
+
+def _field(result, size, name):
+    return next(f for f in result.per_size[size].fields if f.field == name)
+
+
+def test_every_size_explains_its_fit_in_numbers(client):
+    result = _result(client)
+    chest = _field(result, "M", "chest")
+    assert (chest.body_cm, chest.size_min, chest.size_max, chest.ideal_cm) == (95.0, 92, 98, 95.0)
+    assert chest.difference_cm == 0.0 and chest.verdict == "good"
+    # S is made for 86–92 (ideal 89): 6 cm too small for this chest
+    assert (_field(result, "S", "chest").difference_cm, _field(result, "S", "chest").verdict) == (6.0, "tight")
+    assert _field(result, "XL", "chest").verdict == "loose"
+    length = _field(result, "M", "length")
+    assert length.body_cm == round(46.5 * sizing.LENGTH_PER_TORSO, 1) and length.label == "length"
+
+
+def test_verdict_words():
+    assert sizing.verdict("chest", 0.5) == "good"
+    assert sizing.verdict("chest", 1.0) == "slightly_tight"
+    assert sizing.verdict("waist", -2.0) == "loose"
+    assert sizing.verdict("length", 1.0) == "slightly_short"
+    assert sizing.verdict("sleeve", -1.6) == "long"
+
+
+def test_between_sizes_names_the_neighbour(client):
+    result = _result(client, measurements=BETWEEN_M_AND_L)
+    assert {result.recommended_size, result.alternative_size} == {"M", "L"}
+    assert "between M and L" in result.alternative_note
+
+
+def test_a_clear_size_has_no_alternative(client):
+    result = _result(client)
+    assert result.alternative_size is None and result.alternative_note is None
+
+
+def test_alternative_note_says_which_size_fits_closer():
+    sizes = ["S", "M", "L"]
+    alt, note = sizing.between_sizes(sizes, {"S": 0.1, "M": 0.9, "L": 0.8}, "M")
+    assert alt == "L"
+    assert note == "You're between M and L: M is the closer match; L fits more relaxed."
+    alt, note = sizing.between_sizes(sizes, {"S": 0.1, "M": 0.8, "L": 0.9}, "L")
+    assert alt == "M" and note.endswith("M fits closer.")
+    assert sizing.between_sizes(sizes, {"S": 0.1, "M": 0.9, "L": 0.5}, "M") == (None, None)
+
+
+SLEEVES = ([61, 62.5], [62.5, 64], [64, 65.5], [65.5, 67])
+SLEEVE_CHART = {size: {**ranges, "sleeve": sleeve} for (size, ranges), sleeve in zip(CHART.items(), SLEEVES)}
+
+
+def test_long_sleeves_are_compared_with_arm_length(client):
+    result = _result(client, chart=SLEEVE_CHART)
+    sleeve = _field(result, "M", "sleeve")
+    assert sleeve.body_cm == round(60.0 * sizing.SLEEVE_PER_ARM, 1)
+    assert (sleeve.verdict, sleeve.label) == ("good", "sleeves")
+    assert result.recommended_size == "M"
+
+
+def test_short_arms_hear_about_long_sleeves(client):
+    short_arms = {**MEDIUM, "arm_cm": 55.0}  # ideal sleeve ≈ 58 cm; M sleeves are 62.5–64
+    result = _result(client, measurements=short_arms, chart=SLEEVE_CHART)
+    assert "long in the sleeves" in result.per_size["M"].note.lower()
+    assert _field(result, "M", "sleeve").verdict == "long"
+
+
+def test_sleeves_only_count_for_tops():
+    from app.schemas import Measurements
+
+    assert sizing.body_value("sleeve", Measurements(**MEDIUM), "dresses") is None
+    assert sizing.body_value("sleeve", Measurements(**MEDIUM), "upper_body") == 60.0 * sizing.SLEEVE_PER_ARM

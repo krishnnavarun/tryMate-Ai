@@ -10,6 +10,7 @@ samples.csv (copy scripts/calibration_template.csv) has one row per photo:
     shoulder_cm      tape across the back, from one shoulder tip to the other
     chest_cm         tape around the fullest part of the chest, under the arms
     waist_cm         tape around the waist at navel height
+    sleeve_cm        a long-sleeve shirt that fits you well: shoulder seam to the end of the cuff
     shirt_length_cm  a T-shirt that fits you well, laid flat: from the highest point of the
                      shoulder (next to the collar) straight down to the hem
     undertone        warm | neutral | cool, if you know it
@@ -23,6 +24,7 @@ which constants to change:
     chest      CHEST_CALIBRATION                            app/services/measurements.py
     waist      WAIST_CALIBRATION                            app/services/measurements.py
     length     LENGTH_PER_TORSO                             app/services/sizing.py
+    sleeve     SLEEVE_PER_ARM                               app/services/sizing.py
     undertone  UNDERTONE_COOL_BELOW / UNDERTONE_WARM_ABOVE  app/services/skin_tone.py
 
 Each measurement scales linearly with its constant, so the suggestion is
@@ -51,7 +53,7 @@ from app.services.face import FaceFinder  # noqa: E402
 from app.services.image_io import decode_image  # noqa: E402
 from app.services.pose import PoseDetector, select_single_full_body  # noqa: E402
 
-TAPE_COLUMNS = ("shoulder_cm", "chest_cm", "waist_cm", "shirt_length_cm")
+TAPE_COLUMNS = ("shoulder_cm", "chest_cm", "waist_cm", "shirt_length_cm", "sleeve_cm")
 UNDERTONES = ("warm", "neutral", "cool")
 
 MIN_PHOTOS = 3  # fewer than this: suggestions are shown, with a warning
@@ -153,7 +155,15 @@ def measure_photo(sample: Sample, detector, face_finder, debug_dir: Path | None 
 
     body = measurements.measure(pose, sample.height_cm)
     m = body.measurements
-    result.measured = {"shoulder_cm": m.shoulder_cm, "chest_cm": m.chest_cm, "waist_cm": m.waist_cm, "torso_cm": m.torso_cm}
+    result.measured = {
+        "shoulder_cm": m.shoulder_cm,
+        "chest_cm": m.chest_cm,
+        "waist_cm": m.waist_cm,
+        "torso_cm": m.torso_cm,
+        "arm_cm": m.arm_cm,
+    }
+    if measurements.WARN_ARM_LENGTH in body.warnings:
+        result.estimated.add("arm_cm")  # arms not visible: estimated from height
     if measurements.WARN_ARMS_CHEST in body.warnings:
         result.estimated.add("chest_cm")
     if measurements.WARN_ARMS_WAIST in body.warnings:
@@ -240,6 +250,11 @@ def suggest_measurements(results: list[PhotoResult]) -> list[Suggestion]:
             Suggestion("length", "LENGTH_PER_TORSO", "sizing.py", sizing.LENGTH_PER_TORSO),
             pairs("torso_cm", "shirt_length_cm", sizing.LENGTH_PER_TORSO),
         ),
+        # Ideal sleeve = arm_cm × SLEEVE_PER_ARM, compared with a long-sleeve shirt that fits
+        scale_suggestion(
+            Suggestion("sleeve", "SLEEVE_PER_ARM", "sizing.py", sizing.SLEEVE_PER_ARM),
+            pairs("arm_cm", "sleeve_cm", sizing.SLEEVE_PER_ARM),
+        ),
     ]
     for label, key in (("chest", "chest_cm"), ("waist", "waist_cm")):
         skipped = sum(1 for r in measured if key in r.estimated and key in r.sample.tape)
@@ -308,6 +323,9 @@ def print_photo(result: PhotoResult) -> None:
     ideal = m["torso_cm"] * sizing.LENGTH_PER_TORSO
     extra = f"   (torso {m['torso_cm']:.1f} x {sizing.LENGTH_PER_TORSO})"
     print(_row("length", tape.get("shirt_length_cm"), ideal, extra, names=("shirt", "ideal")))
+    sleeve = m["arm_cm"] * sizing.SLEEVE_PER_ARM
+    extra = f"   (arm {m['arm_cm']:.1f} x {sizing.SLEEVE_PER_ARM})"
+    print(_row("sleeve", tape.get("sleeve_cm"), sleeve, extra, names=("shirt", "ideal")))
     if result.hue is None:
         print("    undertone: no face found")
     else:

@@ -175,14 +175,48 @@ class RecommendSizeRequest(BaseModel):
     )
 
 
+FitVerdict = Literal[
+    "good",
+    "slightly_tight",
+    "tight",
+    "slightly_loose",
+    "loose",
+    "slightly_short",
+    "short",
+    "slightly_long",
+    "long",
+]
+
+
+class FieldFit(BaseModel):
+    """How one part of a size fits: the numbers behind the note, for a fit breakdown."""
+
+    field: str = Field(examples=["chest"])  # the size chart field
+    label: str = Field(examples=["chest"])  # how notes name it ("shoulders", "sleeves"...)
+    # The body value compared with the chart. For girths (chest, waist, shoulder) it's the
+    # body measurement; for lengths (length, sleeve) the garment length that suits this body.
+    body_cm: float = Field(examples=[97.1])
+    size_min: float = Field(examples=[94])
+    size_max: float = Field(examples=[100])
+    ideal_cm: float = Field(examples=[97.0])  # where the body should sit, for the fit preference
+    difference_cm: float = Field(examples=[0.1])  # body − ideal; + = tighter / garment shorter
+    verdict: FitVerdict = Field(examples=["good"])
+
+
 class SizeFit(BaseModel):
     score: float = Field(ge=0, le=1, examples=[0.93])
     note: str = Field(examples=["Good fit"])
+    fields: list[FieldFit] = Field(default_factory=list)
 
 
 class RecommendSizeResponse(BaseModel):
     recommended_size: str = Field(examples=["M"])
     per_size: dict[str, SizeFit]
+    # A neighbouring size that fits almost as well ("between sizes"), or null
+    alternative_size: str | None = Field(default=None, examples=["L"])
+    alternative_note: str | None = Field(
+        default=None, examples=["You're between M and L: M is the closer match; L fits more relaxed."]
+    )
 
     @model_validator(mode="after")
     def _recommended_size_is_listed(self) -> "RecommendSizeResponse":

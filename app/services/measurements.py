@@ -41,6 +41,9 @@ HOW IT WORKS
    at that height: we estimate the breadth from shoulder width instead (ANSUR II ratios
    0.697 chest/shoulder, 0.785 waist/shoulder) and add a warning. Standing with the arms
    ~30° away from the body (an "A" pose) avoids this.
+   A torso outline much wider than the shoulders suggest (LOOSE_CHEST_RATIO /
+   LOOSE_WAIST_RATIO) is most likely a loose top: it's still measured, with a warning,
+   because loose clothes make chest and waist read big.
 
 Expected accuracy (honest): with a good photo (fitted clothes, arms slightly away, camera
 at chest height, facing straight on), roughly ±2–3 cm for lengths and ±4–8 cm for chest/
@@ -91,6 +94,10 @@ HEAD_TOP_ABOVE_EYES = 0.62
 # means the silhouette is wrong. In ANSUR II the ratios are 0.70 (chest) and 0.79 (waist),
 # up to ~1.0 for heavier men; clothing adds a bit more.
 BREADTH_RATIO_LIMITS = (0.45, 1.2)
+# Above these (but inside the limits) the outline is wider than even a heavy build usually
+# is: most likely a loose top, which makes chest/waist read big. Measured, but with a warning.
+LOOSE_CHEST_RATIO = 1.0
+LOOSE_WAIST_RATIO = 1.05
 
 WARN_ARMS_CHEST = "Arms close to body — chest was estimated from shoulder width and may be less accurate"
 WARN_ARMS_WAIST = "Arms or hands touching the waist — waist was estimated and may be less accurate"
@@ -100,6 +107,7 @@ WARN_TURNED = "Your body seems turned — stand facing the camera straight on"
 WARN_SMALL = "You look small in the photo — stand closer so your body fills most of the frame"
 WARN_ARM_LENGTH = "Arms not clearly visible — arm length was estimated from your height"
 WARN_LEG_LENGTH = "Legs not clearly visible — leg length was estimated from your height"
+WARN_LOOSE = "Your top looks loose — chest and waist may read bigger than you are. A fitted top gives more accurate results"
 
 
 @dataclass
@@ -381,6 +389,15 @@ def measure(pose: Pose, height_cm: float) -> MeasurementResult:
     else:
         waist_breadth_cm = waist_px * cm_per_px * WAIST_CALIBRATION
     waist_cm = WAIST_CIRC_PER_BREADTH * waist_breadth_cm
+
+    # Loose clothing: the outline is wider than a body this broad usually is
+    reference_px = shoulder_px * SHOULDER_WIDTH_FACTOR
+    loose = (chest_px is not None and chest_px / reference_px > LOOSE_CHEST_RATIO) or (
+        waist_px is not None and waist_px / reference_px > LOOSE_WAIST_RATIO
+    )
+    if loose:
+        warnings.append(WARN_LOOSE)
+        penalty *= 0.9
 
     for run, name, value, used in ((chest_run, "chest", chest_cm, chest_px), (waist_run, "waist", waist_cm, waist_px)):
         if run:

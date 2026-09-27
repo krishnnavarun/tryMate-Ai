@@ -14,7 +14,7 @@ size recommendation and virtual try-on. Only the store's Express server calls it
 |---|---|---|
 | `GET /health` | none | `{status, version}` |
 | `POST /analyze` | `X-API-Key` | photo + height → measurements, skin tone, 8 suggested colors, confidence, warnings, optional debug image |
-| `POST /recommend-size` | `X-API-Key` | measurements + size chart → best size + score and fit note per size |
+| `POST /recommend-size` | `X-API-Key` | measurements + size chart → best size; per size a score, a fit note and a fit breakdown; "between sizes" advice |
 | `POST /try-on` | `X-API-Key` | person photo + garment → try-on image (Replicate IDM-VTON, or a free local mock) |
 
 ---
@@ -37,7 +37,10 @@ Full maths in [`app/services/measurements.py`](app/services/measurements.py).
    from the same data.
 5. **Arms touching the body:** the width search stops at the arm; if the arm touches the torso,
    the breadth is estimated from shoulder width and a warning is added.
-6. **Confidence** = average landmark visibility × a penalty for each fallback/problem.
+6. **Loose clothes:** a torso outline much wider than the shoulders suggest (chest over 1.0×,
+   waist over 1.05× the shoulder width; even heavy builds rarely reach this) is most likely a
+   loose top. It's still measured, with a warning ("Your top looks loose…") and lower confidence.
+7. **Confidence** = average landmark visibility × a penalty for each fallback/problem.
 
 **Accuracy (honest):** even with a perfect width, width → circumference has a typical error of
 ~4.7 cm (chest) and ~2.6 cm (waist) in ANSUR II. With a good photo expect roughly ±4–8 cm for
@@ -81,21 +84,31 @@ resizing, JPEG quality and ±15% exposure, except +15% brightness moved deep →
 ### 3. Size recommendation (`/recommend-size`)
 Full details in [`app/services/sizing.py`](app/services/sizing.py).
 
-- Chart fields compared: `chest`, `waist`, `shoulder`, `length` (tops/dresses: ≈ torso × 1.55)
-  and `inseam` (lower body). Other fields (e.g. `hip`) are ignored.
+- Chart fields compared: `chest`, `waist`, `shoulder`, `length` (tops/dresses: ≈ torso × 1.55),
+  `sleeve` (long-sleeve tops: ≈ arm × 1.06, `SLEEVE_PER_ARM`) and `inseam` (lower body).
+  Other fields (e.g. `hip`) are ignored.
 - **Fit preference** moves the ideal point inside each range: regular = middle,
   slim = 75% up (snug), loose = 25% up (roomy). Length ignores the preference.
 - **Score** = `exp(−½ × Σ wᵢ dᵢ² / Σ wᵢ)`, where `dᵢ` = (body − ideal) / σ (σ ≈ 4 cm for
   chest/waist, 2 cm for shoulders, close to the measurement error). **Weights** by category:
-  upper body = chest 0.45 · shoulder 0.25 · waist 0.15 · length 0.15.
+  upper body = chest 0.45 · shoulder 0.25 · waist 0.15 · length 0.15 · sleeve 0.12 (re-normalised
+  over the fields a chart has, so charts without sleeves score as before).
 - **Best size** = highest score (a tie goes to the larger size).
 - **Notes** from the direction of each deviation over 0.75σ: "Tight at chest and shoulders",
-  "Loose at shoulders, slightly long", "Good fit".
+  "Loose at shoulders, slightly long", "Long in the sleeves", "Good fit".
+- **Fit breakdown** (`per_size.<size>.fields`): for every compared part, the body value, the
+  size's range, the ideal point for the fit preference, the difference in cm and a verdict
+  (`good`, `slightly_tight`, `tight`, `slightly_loose`, `loose`, `slightly_short`, `short`,
+  `slightly_long`, `long`). This lets the shop say exactly where a size is off and by how much.
+- **Between sizes**: when the neighbouring size scores at least 75% of the best one,
+  `alternative_size` + `alternative_note` say so: "You're between M and L: M is the closer
+  match; L fits more relaxed." Otherwise both are `null`.
 - A chart with no comparable fields → `422 INVALID_INPUT`.
 
 Hand-checked: textbook M → M ("Good fit"); exactly between M and L → slim M, regular L,
 loose L; bigger than every size → XL; smaller than every size → S; broad shoulders → M with
-"Tight at shoulders". All of these are tests.
+"Tight at shoulders"; short arms → "Long in the sleeves"; a chest on the M/L boundary → "between
+M and L". All of these are tests.
 
 ### 4. Virtual try-on (`/try-on`)
 - A provider interface ([`app/tryon/base.py`](app/tryon/base.py)) with two providers:
@@ -163,7 +176,7 @@ uvicorn app.main:app --reload --port 8000
 ## Test
 
 ```bash
-pytest          # 183 tests, a few seconds; never calls Replicate
+pytest          # 195 tests, a few seconds; never calls Replicate
 ```
 
 The API tests use fake detectors (also at startup), so only a handful of tests load the real
@@ -202,6 +215,7 @@ python scripts/calibrate.py calibration/samples.csv --debug-dir calibration/debu
   | chest | `CHEST_CALIBRATION` | `app/services/measurements.py` |
   | waist | `WAIST_CALIBRATION` | `app/services/measurements.py` |
   | garment length | `LENGTH_PER_TORSO` | `app/services/sizing.py` |
+  | sleeve length | `SLEEVE_PER_ARM` | `app/services/sizing.py` |
   | undertone | `UNDERTONE_COOL_BELOW` / `UNDERTONE_WARM_ABOVE` | `app/services/skin_tone.py` |
 
 - **How it's computed:** each measurement scales linearly with its constant, so the suggestion
