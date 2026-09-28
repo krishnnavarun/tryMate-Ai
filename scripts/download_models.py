@@ -2,7 +2,7 @@
 
 Usage:
     python scripts/download_models.py                 # all models
-    python scripts/download_models.py --only pose_landmarker_full.task face_detector.tflite
+    python scripts/download_models.py --only pose_landmarker_heavy.task face_landmarker.task
     python scripts/download_models.py --force         # re-download even if present
 
 Which pose model to use (lite / full / heavy) is decided in R&D; all three are listed
@@ -24,7 +24,6 @@ MODELS: dict[str, str] = {
     "pose_landmarker_full.task": f"{BASE}/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task",
     "pose_landmarker_heavy.task": f"{BASE}/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task",
     "face_landmarker.task": f"{BASE}/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
-    "face_detector.tflite": f"{BASE}/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite",
 }
 
 

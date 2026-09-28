@@ -236,7 +236,7 @@ python scripts/calibrate.py calibration/samples.csv --debug-dir calibration/debu
 |---|---|---|
 | `SERVICE_API_KEY` | `change-me` | Shared secret. Must match `AI_SERVICE_KEY` in the store's `server/.env`. |
 | `REPLICATE_API_TOKEN` | *(empty)* | Replicate token for real try-on. |
-| `TRYON_PROVIDER` | `replicate_idm` | `replicate_idm` \| `mock` (`catvton` is reserved, not implemented) |
+| `TRYON_PROVIDER` | `replicate_idm` | `replicate_idm` \| `mock` |
 | `TRYON_MOCK` | `false` | `true` = always use the free mock provider. |
 | `REPLICATE_IDM_VERSION` | *(empty)* | Pin an IDM-VTON version id; empty = the model's latest version. |
 | `TRYON_RATE_LIMIT_PER_MINUTE` | `30` | Global cap on try-ons per minute (0 = off). |

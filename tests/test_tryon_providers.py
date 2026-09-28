@@ -7,6 +7,7 @@ import cv2
 import httpx
 import numpy as np
 import pytest
+from pydantic import ValidationError
 from replicate.exceptions import ReplicateError
 
 from app.config import Settings
@@ -157,10 +158,9 @@ def test_replicate_is_selected_with_a_token():
     assert get_tryon_provider(settings).name == "replicate_idm"
 
 
-def test_unimplemented_provider_errors():
-    with pytest.raises(AppError) as info:
-        get_tryon_provider(Settings(_env_file=None, tryon_provider="catvton"))
-    assert info.value.code == ErrorCode.TRYON_FAILED
+def test_unknown_provider_is_rejected_at_startup():
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, tryon_provider="catvton")
 
 
 # ---- rate limit --------------------------------------------------------------------------

@@ -37,7 +37,7 @@ class Settings(BaseSettings):
 
     service_api_key: str = "change-me"
     replicate_api_token: str = ""
-    tryon_provider: Literal["replicate_idm", "catvton", "mock"] = "replicate_idm"
+    tryon_provider: Literal["replicate_idm", "mock"] = "replicate_idm"
     tryon_mock: bool = False
     log_level: Literal["debug", "info", "warning", "error", "critical"] = "info"
     # text = readable lines for development; json = one JSON object per line (production)
